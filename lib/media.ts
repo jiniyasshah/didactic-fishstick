@@ -1,5 +1,7 @@
 import { Input, ALL_FORMATS, BlobSource, CanvasSink, AudioBufferSink, Output, BufferTarget, Mp4OutputFormat, CanvasSource, AudioSampleSink, AudioSampleSource, Conversion, WavOutputFormat, canEncodeVideo, canEncodeAudio } from 'mediabunny';
 import { drawProject, type Project } from './editor';
+import { wavBlob } from './local-ai';
+import { ensureFont } from './fonts';
 export async function inspectMedia(file: Blob) { const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS }); try {
     const duration = await input.computeDuration();
     const video = await input.getPrimaryVideoTrack();
@@ -57,6 +59,7 @@ export async function exportMp4(project: Project, media: Blob | null, audio: Blo
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d')!;
+    await Promise.all(project.captions.map(c => ensureFont(c.font, c.words.map(w => w.text).join(''))));
     await document.fonts.ready;
     const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target: new BufferTarget() });
     const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: height === 2160 ? 40000000 : 12000000 });
@@ -138,3 +141,34 @@ export async function exportMp4(project: Project, media: Blob | null, audio: Blo
     }
 }
 export function download(blob: Blob, name: string) { const a = document.createElement('a'); const url = URL.createObjectURL(blob); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
+
+/** Decode and resample locally; preserve timestamps, including gaps in the source track. */
+export async function decodePcm(file: Blob, rate: number, channels: number, signal: AbortSignal) {
+    const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+    try {
+        if (!await input.getPrimaryAudioTrack()) throw new Error('This file has no audio track.');
+        const output = new Output({ format: new WavOutputFormat(), target: new BufferTarget() });
+        const conversion = await Conversion.init({ input, output, video: { discard: true }, audio: { sampleRate: rate, numberOfChannels: channels } });
+        if (!conversion.isValid) throw new Error('This audio format cannot be decoded. Try WAV, MP3, or AAC.');
+        const cancel = () => { void conversion.cancel(); };
+        signal.addEventListener('abort', cancel, { once: true });
+        try { signal.throwIfAborted(); await conversion.execute(); signal.throwIfAborted(); }
+        finally { signal.removeEventListener('abort', cancel); }
+        const context = new OfflineAudioContext(channels, 1, rate);
+        const audio = await context.decodeAudioData(output.target.buffer!);
+        signal.throwIfAborted();
+        return Array.from({ length: channels }, (_, c) => new Float32Array(audio.getChannelData(Math.min(c, audio.numberOfChannels - 1))));
+    } finally { input.dispose(); }
+}
+
+export async function mixAudio(tracks: { file: Blob; gain: number }[], duration: number, signal: AbortSignal) {
+    const active = tracks.filter(t => t.gain > 0);
+    if (!active.length) return null;
+    const frames = Math.ceil(duration * 44100), mix = [new Float32Array(frames), new Float32Array(frames)];
+    for (const track of active) {
+        const channels = await decodePcm(track.file, 44100, 2, signal);
+        for (let c = 0; c < 2; c++) for (let i = 0; i < Math.min(frames, channels[c].length); i++) mix[c][i] += channels[c][i] * track.gain;
+        signal.throwIfAborted();
+    }
+    return wavBlob(mix);
+}

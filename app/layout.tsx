@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import '@fontsource-variable/inter';
+import '@fontsource-variable/inter/wght-italic.css';
+import '@fontsource-variable/lora';
+import '@fontsource-variable/lora/wght-italic.css';
+import '@fontsource-variable/montserrat';
+import '@fontsource-variable/montserrat/wght-italic.css';
 
 export const metadata: Metadata = {
   title: "Verse — Caption & Lyric Studio",
