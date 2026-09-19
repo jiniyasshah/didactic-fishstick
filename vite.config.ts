@@ -4,6 +4,7 @@ import { readExecutionProfile } from "./scripts/execution-profile.mjs";
 import { sites } from "./build/sites-vite-plugin";
 import { buildLocalAI } from "./scripts/build-local-ai.mjs";
 import { nitro } from "nitro/vite";
+import tailwindcss from "@tailwindcss/vite";
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
@@ -31,6 +32,11 @@ export default defineConfig(async () => {
         ? { watch: { useFsEvents: false, usePolling: true } }
         : {}),
     },
-    plugins: [vinext(), nitro(), sites({ mockAuth: !managedLinux })],
+    plugins: [
+      tailwindcss(),
+      vinext(),
+      nitro(),
+      sites({ mockAuth: !managedLinux }),
+    ],
   };
 });
