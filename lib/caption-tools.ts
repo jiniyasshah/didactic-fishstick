@@ -48,7 +48,7 @@ export function groupWords(source: Word[], rules: CaptionRules = defaultRules, t
   const flush = () => { if (group.length) groups.push(group); group = []; };
   for (const word of tokens) {
     const count = group.reduce((n, w) => n + w.text.length, 0) + group.length + word.text.length;
-    if (group.length && (group.length >= rules.maxWords || count > rules.maxChars || word.start! - group.at(-1)!.end! >= rules.pause)) flush();
+    if (group.length && (rules.limitBy !== 'characters' && group.length >= rules.maxWords || rules.limitBy !== 'words' && count > rules.maxChars || word.start! - group.at(-1)!.end! >= rules.pause)) flush();
     group.push(word);
     if (/[.!?…。！？]$/.test(word.text) || /[,;:，；：]$/.test(word.text) && group.length >= Math.ceil(rules.maxWords / 2)) flush();
   }
@@ -110,21 +110,28 @@ export function emphasize(c: Caption, options: EmphasisOptions, semantic: number
     const score = fillers.has(text) ? -1 : (semantic[i] ?? 0) * 2 + (emotional ? 1.6 : active ? .8 : 0) + (stressed ? 1.2 : 0) + (held ? .5 : 0) + (beforePause ? .45 : 0) + (/!/.test(w.text) ? .7 : 0);
     return { i, score, emotional, stressed, held, reason: [emotional && 'emotional word', active && 'key action', stressed && 'vocal energy', held && 'held word', beforePause && 'pause', (semantic[i] ?? 0) > .3 && 'caption meaning'].filter(Boolean).join(', ') || 'key phrase' };
   }).filter(x => x.score > .5).sort((a, b) => b.score - a.score || a.i - b.i);
-  const max = Math.max(1, Math.floor(words.length * ({ low: .12, medium: .22, high: .32 }[options.level])));
-  const selected = ranked.slice(0, max);
-  return { ...c, words: c.words.map((w, i) => {
-    const pick = selected.find(s => s.i === i); if (!pick) return w;
-    const patch: Partial<WordStyle> = {};
-    if (options.boldItalic && pick.emotional && (pick.stressed || options.level === 'high')) { patch.bold = true; patch.italic = true; }
-    else if (options.italic && pick.emotional) patch.italic = true;
-    else if (options.bold) patch.bold = true;
-    else if (options.boldItalic) { patch.bold = true; patch.italic = true; }
-    else if (options.italic) patch.italic = true;
-    if (options.size && (pick.stressed || pick.held || pick.score >= 1.5 || !options.bold && !options.italic && !options.boldItalic)) patch.size = Math.min(400, w.size * ({ low: 1.12, medium: 1.2, high: 1.3 }[options.level]));
+  const max = Math.min(Math.max(1, words.length - 1), Math.max(1, Math.ceil(words.length * ({ low: .12, medium: .25, high: .45 }[options.level]))));
+  const variants: { bold?: boolean; italic?: boolean; large: boolean }[] = [];
+  if (options.bold) variants.push({ bold: true, large: false });
+  if (options.italic) variants.push({ italic: true, large: false });
+  if (options.boldItalic) variants.push({ bold: true, italic: true, large: false });
+  if (options.size) { variants.push(...variants.map(v => ({ ...v, large: true })), { large: true }); }
+  const applied = new Map<number, Word>(), used = new Set<string>();
+  for (const pick of ranked.slice(0, max)) {
+    const w = c.words[pick.i];
+    const choices = variants.map((variant, order) => {
+      const patch: Partial<WordStyle> = { ...(variant.bold ? { bold: true } : {}), ...(variant.italic ? { italic: true } : {}), ...(variant.large ? { size: Math.min(400, w.size * ({ low: 1.12, medium: 1.2, high: 1.3 }[options.level])) } : {}) };
+      const key = [patch.bold ?? w.bold, patch.italic ?? w.italic, (patch.size ?? w.size) > w.size].join(':');
+      const score = (variant.italic && pick.emotional ? 3 : 0) + (variant.bold && pick.stressed ? 3 : 0) + (variant.bold && !pick.emotional ? 1.5 : 0) + (variant.large && (pick.stressed || pick.held || pick.score >= 1.5) ? 2 : 0) - (variant.bold && variant.italic && !pick.emotional ? 1 : 0) - (used.has(key) ? 10 : 0);
+      return { patch, key, score, order };
+    }).filter(v => (words.length > 5 || !used.has(v.key)) && Object.entries(v.patch).some(([key,value]) => w[key as keyof WordStyle] !== value)).sort((a,b) => b.score - a.score || a.order - b.order);
+    const choice = choices[0]; if (!choice) continue;
     const before: Partial<WordStyle> = {};
-    for (const key of Object.keys(patch) as (keyof WordStyle)[]) {
-      if (patch[key] === w[key]) delete patch[key]; else Object.assign(before, { [key]: w[key] });
+    for (const key of Object.keys(choice.patch) as (keyof WordStyle)[]) {
+      if (choice.patch[key] === w[key]) delete choice.patch[key]; else Object.assign(before, { [key]: w[key] });
     }
-    return Object.keys(patch).length ? { ...w, ...patch, auto: { before, applied: patch, reason: pick.reason } } : w;
-  }) };
+    used.add(choice.key);
+    applied.set(pick.i, { ...w, ...choice.patch, auto: { before, applied: choice.patch, reason: pick.reason } });
+  }
+  return { ...c, words: c.words.map((w,i) => applied.get(i) ?? w) };
 }

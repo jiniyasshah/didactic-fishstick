@@ -42,14 +42,14 @@ export type Project = {
     captionRules?: CaptionRules;
     mixer?: Mixer;
 };
-export type CaptionRules = { mode: 'single' | 'multi'; maxWords: number; maxChars: number; maxLines: number; pause: number };
+export type CaptionRules = { mode: 'single' | 'multi'; limitBy?: 'words' | 'characters' | 'both'; maxWords: number; maxChars: number; maxLines: number; pause: number };
 export const defaultRules: CaptionRules = { mode: 'multi', maxWords: 7, maxChars: 42, maxLines: 2, pause: .7 };
 export type TrackName = 'original' | 'vocals' | 'instrumental';
-export type Mixer = Record<TrackName, { muted: boolean; solo: boolean; volume: number }>;
+export type Mixer = Record<TrackName, { muted: boolean; solo: boolean; volume: number; enabled?: boolean; name?: string }>;
 export const defaultMixer: Mixer = { original: { muted: false, solo: false, volume: 1 }, vocals: { muted: true, solo: false, volume: 1 }, instrumental: { muted: true, solo: false, volume: 1 } };
 export function trackGain(mixer: Mixer, key: TrackName, available: TrackName[] = ['original', 'vocals', 'instrumental']) {
-    const item = mixer[key], solo = available.some(k => mixer[k].solo);
-    return !available.includes(key) || item.muted || (solo && !item.solo) ? 0 : item.volume;
+    const item = mixer[key], solo = available.some(k => mixer[k].solo && mixer[k].enabled !== false);
+    return !available.includes(key) || item.enabled === false || item.muted || (solo && !item.solo) ? 0 : item.volume;
 }
 export const baseStyle: WordStyle = { bold: false, italic: false, size: 90, color: '#ffffff' };
 export const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
@@ -173,10 +173,12 @@ export function validateProject(raw: unknown): Project {
     const ids = new Set<string>();
     if (p.mixer) for (const key of ['original', 'vocals', 'instrumental'] as const) {
         const track = p.mixer[key];
+        if (track?.enabled !== undefined && typeof track.enabled !== 'boolean' || track?.name !== undefined && (typeof track.name !== 'string' || track.name.length > 80)) throw new Error('Invalid audio track settings.');
         if (!track || typeof track.muted !== 'boolean' || typeof track.solo !== 'boolean' || !Number.isFinite(track.volume) || track.volume < 0 || track.volume > 1) throw new Error('The project contains invalid mixer settings.');
     }
     if (p.captionRules) {
         const r = p.captionRules;
+        if (r.limitBy !== undefined && !['words', 'characters', 'both'].includes(r.limitBy)) throw new Error('Invalid caption limit.');
         if (!['single', 'multi'].includes(r.mode) || !Number.isInteger(r.maxWords) || r.maxWords < 1 || r.maxWords > 50 || !Number.isInteger(r.maxChars) || r.maxChars < 8 || r.maxChars > 250 || !Number.isInteger(r.maxLines) || r.maxLines < 1 || r.maxLines > 6 || !Number.isFinite(r.pause) || r.pause < .1 || r.pause > 3) throw new Error('The project contains invalid caption rules.');
     }
     for (const c of p.captions) {
